@@ -1,0 +1,18 @@
+*.o
+*.exe
+*.dll
+*.so
+*.a
+*.lib
+
+# OS Generated #
+.DS_Store*
+ehthumbs.db
+Icon?
+Thumbs.db
+
+build/
+build_*/
+bin/
+.vs/
+.vscode/
