@@ -26,12 +26,14 @@ then
   echo "Found vcpkg in VCPKG_ROOT: ${vcpkg_path}"
 elif [[ ! -z "${WORKSPACE}" ]] && [ -d ${WORKSPACE}/vcpkg${vcpkg_fork} ] && [ ! "$bypass_vcpkg" = true ]
 then
+  additional_defines="-DDarknet_DIR=/home/ssinigar/Codice/darknet_bionic/share/darknet"
   vcpkg_path="${WORKSPACE}/vcpkg${vcpkg_fork}"
   vcpkg_define="-DCMAKE_TOOLCHAIN_FILE:FILEPATH=${vcpkg_path}/scripts/buildsystems/vcpkg.cmake"
   vcpkg_triplet_define="-DVCPKG_TARGET_TRIPLET:STRING=$vcpkg_triplet"
   echo "Found vcpkg in WORKSPACE/vcpkg${vcpkg_fork}: ${vcpkg_path}"
-elif [ ! "$bypass_vcpkg" = true ]
+elif [ "$bypass_vcpkg" = true ]
 then
+  additional_defines="-DDarknet_DIR=/home/ssinigar/Codice/darknet_bionic/share/darknet"
   (>&2 echo "darkapp is unsupported without vcpkg, use at your own risk!")
 fi
 
