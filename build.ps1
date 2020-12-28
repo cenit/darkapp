@@ -2,10 +2,27 @@
 
 # Copyright 2019, Stefano Sinigardi
 
-$number_of_build_workers=8
-$vcpkg_fork="_opencv4"
-#$vcpkg_fork=""
-#$install_prefix="-DCMAKE_INSTALL_PREFIX=.."
+$number_of_build_workers = 8
+$vcpkg_fork = ""
+$darknet_share_dir_outside_vcpkg = "..\darknet_cenit\share\darknet"
+$install_prefix = "-DCMAKE_INSTALL_PREFIX=.."
+
+$CMAKE_EXE = Get-Command cmake | Select-Object -ExpandProperty Definition
+$NINJA_EXE = Get-Command ninja | Select-Object -ExpandProperty Definition
+
+if (-Not $CMAKE_EXE) {
+  throw "Could not find CMake, please install it"
+}
+else {
+  Write-Host "Using CMake from ${CMAKE_EXE}"
+}
+
+if (-Not $NINJA_EXE) {
+  throw "Could not find Ninja, please install it"
+}
+else {
+  Write-Host "Using Ninja from ${NINJA_EXE}"
+}
 
 function getProgramFiles32bit() {
   $out = ${env:PROGRAMFILES(X86)}
@@ -26,12 +43,10 @@ function getLatestVisualStudioWithDesktopWorkloadPath() {
   if (Test-Path $vswhereExe) {
     $output = & $vswhereExe -products * -latest -requires Microsoft.VisualStudio.Workload.NativeDesktop -format xml
     [xml]$asXml = $output
-    foreach ($instance in $asXml.instances.instance)
-    {
+    foreach ($instance in $asXml.instances.instance) {
       $installationPath = $instance.InstallationPath -replace "\\$" # Remove potential trailing backslash
     }
-    if (!$installationPath)
-    {
+    if (!$installationPath) {
       Write-Host "Warning: no full Visual Studio setup has been found, extending search to include also partial installations" -ForegroundColor Yellow
       $output = & $vswhereExe -products * -latest -format xml
       [xml]$asXml = $output
@@ -56,12 +71,10 @@ function getLatestVisualStudioWithDesktopWorkloadVersion() {
   if (Test-Path $vswhereExe) {
     $output = & $vswhereExe -products * -latest -requires Microsoft.VisualStudio.Workload.NativeDesktop -format xml
     [xml]$asXml = $output
-    foreach ($instance in $asXml.instances.instance)
-    {
-        $installationVersion = $instance.InstallationVersion
+    foreach ($instance in $asXml.instances.instance) {
+      $installationVersion = $instance.InstallationVersion
     }
-    if (!$installationVersion)
-    {
+    if (!$installationVersion) {
       Write-Host "Warning: no full Visual Studio setup has been found, extending search to include also partial installations" -ForegroundColor Yellow
       $output = & $vswhereExe -products * -latest -format xml
       [xml]$asXml = $output
@@ -80,16 +93,17 @@ function getLatestVisualStudioWithDesktopWorkloadVersion() {
 }
 
 
-if (${env:VCPKG_ROOT} -and (Test-Path "${env:VCPKG_ROOT}$vcpkg_fork")) {
+if ((Test-Path env:VCPKG_ROOT$vcpkg_fork)) {
   $vcpkg_path = "$env:VCPKG_ROOT$vcpkg_fork"
-  Write-Host "Found vcpkg in VCPKG_ROOT${vcpkg_fork}: $vcpkg_path"
+  Write-Host "Found vcpkg in VCPKG_ROOT"$vcpkg_fork": $vcpkg_path"
 }
-elseif (${env:WORKSPACE} -and (Test-Path "${env:WORKSPACE}\vcpkg$vcpkg_fork")) {
+elseif ((Test-Path "${env:WORKSPACE}\vcpkg$vcpkg_fork")) {
   $vcpkg_path = "${env:WORKSPACE}\vcpkg$vcpkg_fork"
-  Write-Host "Found vcpkg in WORKSPACE\vcpkg${vcpkg_fork}: $vcpkg_path"
+  $env:VCPKG_ROOT = "${env:WORKSPACE}\vcpkg$vcpkg_fork"
+  Write-Host "Found vcpkg in WORKSPACE\vcpkg"$vcpkg_fork": $vcpkg_path"
 }
 else {
-  Throw "darkapp requires vcpkg!"
+  Throw "darkapp could not find vcpkg!"
 }
 
 if ($null -eq $env:VCPKG_DEFAULT_TRIPLET) {
@@ -100,14 +114,18 @@ else {
   $vcpkg_triplet = $env:VCPKG_DEFAULT_TRIPLET
 }
 
+if ($vcpkg_triplet -Match "x86") {
+  Throw "darkapp is supported only in x64 builds!"
+}
+
 if ($null -eq (Get-Command "cl.exe" -ErrorAction SilentlyContinue)) {
-  $vsfound=getLatestVisualStudioWithDesktopWorkloadPath
+  $vsfound = getLatestVisualStudioWithDesktopWorkloadPath
   Write-Host "Found VS in ${vsfound}"
   Push-Location "${vsfound}\Common7\Tools"
-  cmd /c "VsDevCmd.bat -arch=x64 & set" |
-    ForEach-Object {
+  cmd.exe /c "VsDevCmd.bat -arch=x64 & set" |
+  ForEach-Object {
     if ($_ -match "=") {
-      $v = $_.split("="); set-item -force -path "ENV:\$($v[0])"  -value "$($v[1])"
+      $v = $_.split("="); Set-Item -force -path "ENV:\$($v[0])"  -value "$($v[1])"
     }
   }
   Pop-Location
@@ -116,18 +134,7 @@ if ($null -eq (Get-Command "cl.exe" -ErrorAction SilentlyContinue)) {
 
 $tokens = getLatestVisualStudioWithDesktopWorkloadVersion
 $tokens = $tokens.split('.')
-if ($tokens[0] -eq "14") {
-  $generator = "Visual Studio 14 2015"
-}
-elseif ($tokens[0] -eq "15") {
-  $generator = "Visual Studio 15 2017"
-}
-elseif ($tokens[0] -eq "16") {
-  $generator = "Visual Studio 16 2019"
-}
-else {
-  throw "Unknown Visual Studio version, unsupported configuration"
-}
+$generator = "Ninja"
 Write-Host "Setting up environment to use CMake generator: $generator" -ForegroundColor Yellow
 
 if ($null -eq (Get-Command "nvcc.exe" -ErrorAction SilentlyContinue)) {
@@ -145,18 +152,22 @@ if (Test-Path env:CUDA_PATH) {
     $env:CUDA_TOOLKIT_ROOT_DIR = "${env:CUDA_PATH}"
     Write-Host "Added missing env variable CUDA_TOOLKIT_ROOT_DIR" -ForegroundColor Yellow
   }
+  if (-Not(Test-Path env:CUDACXX)) {
+    $env:CUDACXX = "${env:CUDA_PATH}\bin\nvcc.exe"
+    Write-Host "Added missing env variable CUDACXX" -ForegroundColor Yellow
+  }
 }
 
+if ($darknet_share_dir_outside_vcpkg) {
+  $cmake_args = "-G `"$generator`" `"-DCMAKE_TOOLCHAIN_FILE=$vcpkg_path\scripts\buildsystems\vcpkg.cmake`" `"-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet`" `"-DCMAKE_BUILD_TYPE=Release`" ${install_prefix} `"-DDarknet_DIR=$darknet_share_dir_outside_vcpkg`" .."
+}
+else {
+  $cmake_args = "-G `"$generator`" `"-DCMAKE_TOOLCHAIN_FILE=$vcpkg_path\scripts\buildsystems\vcpkg.cmake`" `"-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet`" `"-DCMAKE_BUILD_TYPE=Release`" ${install_prefix} .."
+}
+
+Write-Host "CMake args: $cmake_args"
 New-Item -Path .\build_win_release -ItemType directory -Force
 Set-Location build_win_release
-cmake -G "$generator" -T "host=x64" -A "x64" "-DCMAKE_TOOLCHAIN_FILE=$vcpkg_path\scripts\buildsystems\vcpkg.cmake" "-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet" "-DCMAKE_BUILD_TYPE=Release" $additional_build_setup ${install_prefix} ..
-cmake --build . --config Release --parallel ${number_of_build_workers} --target install
-#cmake --build . --config Release -- /verbosity:detailed
+Start-Process -NoNewWindow -Wait -FilePath $CMAKE_EXE -ArgumentList $cmake_args
+Start-Process -NoNewWindow -Wait -FilePath $CMAKE_EXE -ArgumentList "--build . --config Release --parallel ${number_of_build_workers}"
 Set-Location ..
-
-#New-Item -Path .\build_win_debug -ItemType directory -Force
-#Set-Location build_win_debug
-#cmake -G "$generator" -T "host=x64" -A "x64" "-DCMAKE_TOOLCHAIN_FILE=$vcpkg_path\scripts\buildsystems\vcpkg.cmake" "-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet" "-DCMAKE_BUILD_TYPE=Debug" $additional_build_setup ${install_prefix} ..
-#cmake --build . --config Debug --parallel ${number_of_build_workers} --target install
-##cmake --build . --config Debug -- /verbosity:detailed
-#Set-Location ..

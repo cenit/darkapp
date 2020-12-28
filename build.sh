@@ -3,9 +3,8 @@
 #Copyright 2019, Stefano Sinigardi
 
 number_of_build_workers=8
-bypass_vcpkg=false
-vcpkg_fork="_opencv4"
-#vcpkg_fork=""
+use_vcpkg=false
+vcpkg_fork=""
 #install_prefix="-DCMAKE_INSTALL_PREFIX=.."
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
