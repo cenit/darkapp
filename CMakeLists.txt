@@ -22,9 +22,10 @@ find_package(Darknet CONFIG REQUIRED)
 
 add_executable(darkapp ${CMAKE_CURRENT_LIST_DIR}/src/empty_test.cpp)
 target_link_libraries(darkapp PRIVATE Darknet::dark)
-add_executable(darknet ${CMAKE_CURRENT_LIST_DIR}/src/darknet.c)
-target_link_libraries(darknet PRIVATE Darknet::dark)
+
+# this is the uselib app from official darknet repo, rebuilt here as a full example
 add_executable(yolocpp ${CMAKE_CURRENT_LIST_DIR}/src/yolo_console_dll.cpp)
 target_link_libraries(yolocpp PRIVATE Darknet::dark)
 target_compile_definitions(yolocpp PRIVATE -DUSE_CMAKE_LIBS)
-install(TARGETS darkapp darknet yolocpp DESTINATION ${CMAKE_CURRENT_LIST_DIR}/bin)
+
+install(TARGETS darkapp yolocpp DESTINATION ${CMAKE_CURRENT_LIST_DIR}/bin)
