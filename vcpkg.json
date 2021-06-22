@@ -1,0 +1,16 @@
+{
+  "name": "darkapp",
+  "version": "1.0.0",
+  "homepage": "https://github.com/cenit/darkapp",
+  "description": "Sample app based on darknet framework",
+  "dependencies":
+  [
+    {
+      "name": "darknet",
+      "features":
+      [
+        "opencv-base"
+      ]
+    }
+  ]
+}

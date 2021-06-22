@@ -1,18 +1,27 @@
+# Copyright 2019, Stefano Sinigardi
+# for any question, please mail stefano.sinigardi@coesia.com
+
 *.o
+*.a
+*.dSYM
+*.so
 *.exe
 *.dll
-*.so
-*.a
 *.lib
+data/
+build*/
 
 # OS Generated #
 .DS_Store*
 ehthumbs.db
 Icon?
 Thumbs.db
+*.swp
 
-build/
-build_*/
-bin/
+# IDE generated #
 .vs/
 .vscode/
+
+# Build artifacts
+bin/
+build.log
