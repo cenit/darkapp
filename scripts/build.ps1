@@ -1,12 +1,146 @@
 #!/usr/bin/env pwsh
 
-# Copyright 2019, Stefano Sinigardi
-# MIT license
+<#
+
+.SYNOPSIS
+        build
+        Created By: Stefano Sinigardi
+        Created Date: February 18, 2019
+        Last Modified Date: April 1, 2022
+
+.DESCRIPTION
+Build tool using CMake, trying to properly setup the environment around compiler
+
+.PARAMETER DisableInteractive
+Disable script interactivity (useful for CI runs)
+
+.PARAMETER DisableDLLcopy
+Disable automatic DLL deployment through vcpkg at the end
+
+.PARAMETER EnableCUDA
+Build tool with CUDA support
+
+.PARAMETER EnableCUDNN
+Enable CUDNN feature
+
+.PARAMETER EnableOPENCV
+Build darknet linking to OpenCV
+
+.PARAMETER EnableOPENCV_CUDA
+Use a CUDA-enabled OpenCV build
+
+.PARAMETER EnableOPENMP
+Build tool with OpenMP support
+
+.PARAMETER EnableVTK
+Build tool with VTK support
+
+.PARAMETER EnableCXSDKIntegration
+Enable CX (LMI 3D) SDK integration
+
+.PARAMETER EnableGOSDKIntegration
+Enable GO (Gocator) SDK integration
+
+.PARAMETER BuildDocumentation
+Build documentation using Doxygen
+
+.PARAMETER UseVCPKG
+Use VCPKG to build tool dependencies. Clone it if not already found on system
+
+.PARAMETER DoNotUpdateVCPKG
+Do not update vcpkg before running the build (valid only if vcpkg is cloned by this script or the version found on the system is git-enabled)
+
+.PARAMETER VCPKGSuffix
+Specify a suffix to the vcpkg local folder for searching, useful to point to a custom version
+
+.PARAMETER VCPKGFork
+Specify a fork username to point to a custom version of vcpkg (ex: -VCPKGFork "custom" to point to github.com/custom/vcpkg)
+
+.PARAMETER VCPKGBranch
+Specify a branch to checkout in the vcpkg folder, useful to point to a custom version especially for forked vcpkg versions
+
+.PARAMETER DoNotUpdateTOOL
+Do not update the tool before running the build (valid only if tool is git-enabled)
+
+.PARAMETER DoNotDeleteBuildFolder
+Do not delete temporary cmake build folder at the end of the script
+
+.PARAMETER DoNotSetupVS
+Do not setup VisualStudio environment using the vcvars script
+
+.PARAMETER DoNotUseNinja
+Do not use Ninja for build
+
+.PARAMETER ForceStaticLib
+Create library as static instead of the default linking mode of your system
+
+.PARAMETER ForceVCPKGCacheRemoval
+Force clean up of the local vcpkg binary cache before building
+
+.PARAMETER ForceVCPKGBuildtreesRemoval
+Force clean up of vcpkg buildtrees temp folder at the end of the script
+
+.PARAMETER ForceVCPKGPackagesRemoval
+Force clean up of vcpkg packages folder at the end of the script
+
+.PARAMETER ForceSetupVS
+Forces Visual Studio setup, also on systems on which it would not have been enabled automatically
+
+.PARAMETER ForceGCCVersion
+Force a specific GCC version
+
+.PARAMETER NumberOfBuildWorkers
+Forces a specific number of threads for parallel building
+
+.PARAMETER AdditionalBuildSetup
+Additional setup parameters to manually pass to CMake
+
+.EXAMPLE
+.\build -DisableInteractive -DoNotDeleteBuildFolder -UseVCPKG
+
+#>
+
+<#
+Copyright (c) Stefano Sinigardi
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+#>
 
 param (
   [switch]$DisableInteractive = $false,
+  [switch]$DisableDLLcopy = $false,
+  [switch]$EnableCUDA = $false,
+  [switch]$EnableCUDNN = $false,
+  [switch]$EnableOPENCV = $false,
+  [switch]$EnableOPENCV_CUDA = $false,
+  [switch]$EnableOPENMP = $false,
+  [switch]$EnableVTK = $false,
+  [switch]$EnableCXSDKIntegration = $false,
+  [switch]$EnableGOSDKIntegration = $false,
+  [switch]$BuildDocumentation = $false,
   [switch]$UseVCPKG = $false,
   [switch]$DoNotUpdateVCPKG = $false,
+  [string]$VCPKGSuffix = "",
+  [string]$VCPKGFork = "",
+  [string]$VCPKGBranch = "",
   [switch]$DoNotUpdateTOOL = $false,
   [switch]$DoNotDeleteBuildFolder = $false,
   [switch]$DoNotSetupVS = $false,
@@ -21,12 +155,12 @@ param (
   [string]$AdditionalBuildSetup = ""  # "-DCMAKE_CUDA_ARCHITECTURES=30"
 )
 
-$build_ps1_version = "1.9.5"
+$build_ps1_version = "2.2.0"
 
 $ErrorActionPreference = "SilentlyContinue"
 Stop-Transcript | out-null
 $ErrorActionPreference = "Continue"
-Start-Transcript -Path $PSScriptRoot/build.log
+Start-Transcript -Path $PSScriptRoot/../build.log
 
 Function MyThrow ($Message) {
   if ($DisableInteractive) {
@@ -124,12 +258,13 @@ if ($PSVersionTable.PSVersion.Major -lt 5) {
   MyThrow("Your PowerShell version is too old, please update it.")
 }
 
-
 if ($IsLinux -or $IsMacOS) {
   $bootstrap_ext = ".sh"
+  $exe_ext = ""
 }
 elseif ($IsWindows -or $IsWindowsPowerShell) {
   $bootstrap_ext = ".bat"
+  $exe_ext = ".exe"
 }
 if ($UseVCPKG) {
   Write-Host "vcpkg bootstrap script: bootstrap-vcpkg${bootstrap_ext}"
@@ -150,8 +285,79 @@ if (($IsLinux -or $IsMacOS) -and ($ForceGCCVersion -gt 0)) {
   $env:CXX = "g++-$ForceGCCVersion"
 }
 
+$vcpkg_triplet_set_by_this_script = $false
+
 if (($IsWindows -or $IsWindowsPowerShell) -and (-Not $env:VCPKG_DEFAULT_TRIPLET)) {
-  $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+  $env:VCPKG_DEFAULT_TRIPLET = "x64-windows-release"
+  $vcpkg_triplet_set_by_this_script = $true
+}
+elseif ($IsMacOS -and (-Not $env:VCPKG_DEFAULT_TRIPLET)) {
+  $env:VCPKG_DEFAULT_TRIPLET = "x64-osx-release"
+  $vcpkg_triplet_set_by_this_script = $true
+}
+elseif ($IsLinux -and (-Not $env:VCPKG_DEFAULT_TRIPLET)) {
+  $env:VCPKG_DEFAULT_TRIPLET = "x64-linux-release"
+  $vcpkg_triplet_set_by_this_script = $true
+}
+
+if ($VCPKGSuffix -ne "" -and -not $UseVCPKG) {
+  Write-Host "You specified a vcpkg folder suffix but didn't enable vcpkg integration, doing that for you" -ForegroundColor Yellow
+  $UseVCPKG = $true
+}
+
+if ($VCPKGFork -ne "" -and -not $UseVCPKG) {
+  Write-Host "You specified a vcpkg fork but didn't enable vcpkg integration, doing that for you" -ForegroundColor Yellow
+  $UseVCPKG = $true
+}
+
+if ($VCPKGBranch -ne "" -and -not $UseVCPKG) {
+  Write-Host "You specified a vcpkg branch but didn't enable vcpkg integration, doing that for you" -ForegroundColor Yellow
+  $UseVCPKG = $true
+}
+
+if ($EnableCUDA) {
+  if ($IsMacOS) {
+    Write-Host "Cannot enable CUDA on macOS" -ForegroundColor Yellow
+    $EnableCUDA = $false
+  }
+  Write-Host "CUDA is enabled"
+}
+elseif (-Not $IsMacOS) {
+  Write-Host "CUDA is disabled, please pass -EnableCUDA to the script to enable"
+}
+
+if ($EnableCUDNN) {
+  if ($IsMacOS) {
+    Write-Host "Cannot enable CUDNN on macOS" -ForegroundColor Yellow
+    $EnableCUDNN = $false
+  }
+  Write-Host "CUDNN is enabled"
+}
+elseif (-Not $IsMacOS) {
+  Write-Host "CUDNN is disabled, please pass -EnableCUDNN to the script to enable"
+}
+
+if ($EnableOPENCV) {
+  Write-Host "OPENCV is enabled"
+}
+else {
+  Write-Host "OPENCV is disabled, please pass -EnableOPENCV to the script to enable"
+}
+
+if ($EnableCUDA -and $EnableOPENCV -and (-Not $EnableOPENCV_CUDA)) {
+  Write-Host "OPENCV with CUDA extension is not enabled, you can enable it passing -EnableOPENCV_CUDA"
+}
+elseif ($EnableOPENCV -and $EnableOPENCV_CUDA -and (-Not $EnableCUDA)) {
+  Write-Host "OPENCV with CUDA extension was requested, but CUDA is not enabled, you can enable it passing -EnableCUDA"
+  $EnableOPENCV_CUDA = $false
+}
+elseif ($EnableCUDA -and $EnableOPENCV_CUDA -and (-Not $EnableOPENCV)) {
+  Write-Host "OPENCV with CUDA extension was requested, but OPENCV is not enabled, you can enable it passing -EnableOPENCV"
+  $EnableOPENCV_CUDA = $false
+}
+elseif ($EnableOPENCV_CUDA -and (-Not $EnableCUDA) -and (-Not $EnableOPENCV)) {
+  Write-Host "OPENCV with CUDA extension was requested, but OPENCV and CUDA are not enabled, you can enable them passing -EnableOPENCV -EnableCUDA"
+  $EnableOPENCV_CUDA = $false
 }
 
 if ($UseVCPKG) {
@@ -191,13 +397,14 @@ else {
   Write-Host "Using git from ${GIT_EXE}"
 }
 
-if (Test-Path "$PSScriptRoot/.git") {
-  Write-Host "This tool has been cloned with git and supports self-updating mechanism"
+if (Test-Path "$PSScriptRoot/../.git") {
+  Write-Host "This tool has been added as a submodule in a repo cloned with git and which supports self-updating mechanism"
   if ($DoNotUpdateTOOL) {
     Write-Host "This tool will not self-update sources" -ForegroundColor Yellow
   }
   else {
     Write-Host "This tool will self-update sources, please pass -DoNotUpdateTOOL to the script to disable"
+    Set-Location "$PSScriptRoot/.."
     $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "pull"
     $handle = $proc.Handle
     $proc.WaitForExit()
@@ -205,6 +412,16 @@ if (Test-Path "$PSScriptRoot/.git") {
     if (-Not ($exitCode -eq 0)) {
       MyThrow("Updating this tool sources failed! Exited with error code $exitCode.")
     }
+    if (Test-Path "$PSScriptRoot/../.gitmodules") {
+      $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "submodule update --init --recursive"
+      $handle = $proc.Handle
+      $proc.WaitForExit()
+      $exitCode = $proc.ExitCode
+      if (-Not ($exitCode -eq 0)) {
+        MyThrow("Updating this tool submodule sources failed! Exited with error code $exitCode.")
+      }
+    }
+    Set-Location "$PSScriptRoot"
   }
 }
 
@@ -227,7 +444,7 @@ if (-Not $DoNotUseNinja) {
   $NINJA_EXE = Get-Command "ninja" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Definition
   if (-Not $NINJA_EXE) {
     DownloadNinja
-    $env:PATH += ";${PSScriptRoot}/ninja"
+    $env:PATH = '{0}{1}{2}' -f $env:PATH, [IO.Path]::PathSeparator, "${PSScriptRoot}/ninja"
     $NINJA_EXE = Get-Command "ninja" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Definition
     if (-Not $NINJA_EXE) {
       $DoNotUseNinja = $true
@@ -283,6 +500,14 @@ function getLatestVisualStudioWithDesktopWorkloadPath() {
       }
     }
     if (!$installationPath) {
+      Write-Host "Warning: no full Visual Studio setup has been found, extending search to include also pre-release installations" -ForegroundColor Yellow
+      $output = & $vswhereExe -prerelease -products * -latest -format xml
+      [xml]$asXml = $output
+      foreach ($instance in $asXml.instances.instance) {
+        $installationPath = $instance.InstallationPath -replace "\\$" # Remove potential trailing backslash
+      }
+    }
+    if (!$installationPath) {
       MyThrow("Could not locate any installation of Visual Studio")
     }
   }
@@ -311,6 +536,14 @@ function getLatestVisualStudioWithDesktopWorkloadVersion() {
       }
     }
     if (!$installationVersion) {
+      Write-Host "Warning: no full Visual Studio setup has been found, extending search to include also pre-release installations" -ForegroundColor Yellow
+      $output = & $vswhereExe -prerelease -products * -latest -format xml
+      [xml]$asXml = $output
+      foreach ($instance in $asXml.instances.instance) {
+        $installationVersion = $instance.installationVersion
+      }
+    }
+    if (!$installationVersion) {
       MyThrow("Could not locate any installation of Visual Studio")
     }
   }
@@ -322,30 +555,30 @@ function getLatestVisualStudioWithDesktopWorkloadVersion() {
 
 $vcpkg_root_set_by_this_script = $false
 
-if ((Test-Path env:VCPKG_ROOT) -and $UseVCPKG) {
+if ((Test-Path env:VCPKG_ROOT) -and $UseVCPKG -and $VCPKGSuffix -eq "") {
   $vcpkg_path = "$env:VCPKG_ROOT"
   Write-Host "Found vcpkg in VCPKG_ROOT: $vcpkg_path"
   $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_VCPKG_INTEGRATION:BOOL=ON"
 }
-elseif ((Test-Path "${env:WORKSPACE}/vcpkg") -and $UseVCPKG) {
-  $vcpkg_path = "${env:WORKSPACE}/vcpkg"
-  $env:VCPKG_ROOT = "${env:WORKSPACE}/vcpkg"
+elseif (-not($null -eq ${env:WORKSPACE}) -and (Test-Path "${env:WORKSPACE}/vcpkg${VCPKGSuffix}") -and $UseVCPKG) {
+  $vcpkg_path = "${env:WORKSPACE}/vcpkg${VCPKGSuffix}"
+  $env:VCPKG_ROOT = "${env:WORKSPACE}/vcpkg${VCPKGSuffix}"
   $vcpkg_root_set_by_this_script = $true
-  Write-Host "Found vcpkg in WORKSPACE/vcpkg: $vcpkg_path"
+  Write-Host "Found vcpkg in WORKSPACE/vcpkg${VCPKGSuffix}: $vcpkg_path"
   $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_VCPKG_INTEGRATION:BOOL=ON"
 }
 elseif (-not($null -eq ${RUNVCPKG_VCPKG_ROOT_OUT})) {
-  if((Test-Path "${RUNVCPKG_VCPKG_ROOT_OUT}") -and $UseVCPKG) {
+  if ((Test-Path "${RUNVCPKG_VCPKG_ROOT_OUT}") -and $UseVCPKG) {
     $vcpkg_path = "${RUNVCPKG_VCPKG_ROOT_OUT}"
     $env:VCPKG_ROOT = "${RUNVCPKG_VCPKG_ROOT_OUT}"
     $vcpkg_root_set_by_this_script = $true
-    Write-Host "Found vcpkg in RUNVCPKG_VCPKG_ROOT_OUT: ${vcpkg_path}"
+    Write-Host "Found vcpkg in RUNVCPKG_VCPKG_ROOT_OUT: $vcpkg_path"
     $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_VCPKG_INTEGRATION:BOOL=ON"
   }
 }
 elseif ($UseVCPKG) {
-  if (-Not (Test-Path "$PWD/vcpkg")) {
-    $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "clone https://github.com/microsoft/vcpkg"
+  if (-Not (Test-Path "$PWD/vcpkg${VCPKGSuffix}")) {
+    $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "clone https://github.com/microsoft/vcpkg vcpkg${VCPKGSuffix}"
     $handle = $proc.Handle
     $proc.WaitForExit()
     $exitCode = $proc.ExitCode
@@ -353,32 +586,78 @@ elseif ($UseVCPKG) {
       MyThrow("Cloning vcpkg sources failed! Exited with error code $exitCode.")
     }
   }
-  $vcpkg_path = "$PWD/vcpkg"
-  $env:VCPKG_ROOT = "$PWD/vcpkg"
+  $vcpkg_path = "$PWD/vcpkg${VCPKGSuffix}"
+  $env:VCPKG_ROOT = "$PWD/vcpkg${VCPKGSuffix}"
   $vcpkg_root_set_by_this_script = $true
-  Write-Host "Found vcpkg in $PWD/vcpkg: $PWD/vcpkg"
+  Write-Host "Found vcpkg in $PWD/vcpkg${VCPKGSuffix}: $vcpkg_path"
   $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_VCPKG_INTEGRATION:BOOL=ON"
 }
 else {
-  Write-Host "Skipping vcpkg integration`n" -ForegroundColor Yellow
-  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_VCPKG_INTEGRATION:BOOL=OFF"
+  if (-not ($VCPKGSuffix -eq "")) {
+    MyThrow("Unable to find vcpkg${VCPKGSuffix}")
+  }
+  else {
+    Write-Host "Skipping vcpkg integration`n" -ForegroundColor Yellow
+    $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_VCPKG_INTEGRATION:BOOL=OFF"
+  }
 }
 
-if ($UseVCPKG -and (Test-Path "$vcpkg_path/.git") -and (-Not $DoNotUpdateVCPKG)) {
+$vcpkg_branch_set_by_this_script = $false
+
+if ($UseVCPKG -and (Test-Path "$vcpkg_path/.git")) {
   Push-Location $vcpkg_path
-  $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "pull"
-  $handle = $proc.Handle
-  $proc.WaitForExit()
-  $exitCode = $proc.ExitCode
-  if (-Not ($exitCode -eq 0)) {
-    MyThrow("Updating vcpkg sources failed! Exited with error code $exitCode.")
+  if ($VCPKGFork -ne "") {
+    $git_args = "remote add vcpkgfork https://github.com/${VCPKGFork}/vcpkg"
+    Write-Host "git args: $git_args"
+    $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "$git_args"
+    $handle = $proc.Handle
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    if (-Not ($exitCode -eq 0)) {
+      MyThrow("Adding remote https://github.com/${VCPKGFork}/vcpkg failed! Exited with error code $exitCode.")
+    }
+    $git_args = "fetch vcpkgfork"
+    Write-Host "git args: $git_args"
+    $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "$git_args"
+    $handle = $proc.Handle
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    if (-Not ($exitCode -eq 0)) {
+      MyThrow("Fetching from remote https://github.com/${VCPKGFork}/vcpkg failed! Exited with error code $exitCode.")
+    }
   }
-  $proc = Start-Process -NoNewWindow -PassThru -FilePath $PWD/bootstrap-vcpkg${bootstrap_ext} -ArgumentList "-disableMetrics"
-  $handle = $proc.Handle
-  $proc.WaitForExit()
-  $exitCode = $proc.ExitCode
-  if (-Not ($exitCode -eq 0)) {
-    MyThrow("Bootstrapping vcpkg failed! Exited with error code $exitCode.")
+  if ($VCPKGBranch -ne "") {
+    if ($VCPKGFork -ne "") {
+      $git_args = "checkout vcpkgfork/$VCPKGBranch"
+    }
+    else {
+      $git_args = "checkout $VCPKGBranch"
+    }
+    Write-Host "git args: $git_args"
+    $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "$git_args"
+    $handle = $proc.Handle
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    if (-Not ($exitCode -eq 0)) {
+      MyThrow("Checking out branch $VCPKGBranch failed! Exited with error code $exitCode.")
+    }
+    $vcpkg_branch_set_by_this_script = $true
+  }
+  if (-Not $DoNotUpdateVCPKG -and $VCPKGFork -eq "") {
+    $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "pull"
+    $handle = $proc.Handle
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    if (-Not ($exitCode -eq 0)) {
+      MyThrow("Updating vcpkg sources failed! Exited with error code $exitCode.")
+    }
+    $proc = Start-Process -NoNewWindow -PassThru -FilePath $PWD/bootstrap-vcpkg${bootstrap_ext} -ArgumentList "-disableMetrics"
+    $handle = $proc.Handle
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    if (-Not ($exitCode -eq 0)) {
+      MyThrow("Bootstrapping vcpkg failed! Exited with error code $exitCode.")
+    }
   }
   Pop-Location
 }
@@ -398,6 +677,12 @@ if ($UseVCPKG -and ($vcpkg_path.length -gt 40) -and ($IsWindows -or $IsWindowsPo
 if ($ForceVCPKGCacheRemoval -and (-Not $UseVCPKG)) {
   Write-Host "VCPKG is not enabled, so local vcpkg binary cache will not be deleted even if requested" -ForegroundColor Yellow
 }
+
+if ($UseVCPKG -and $ForceVCPKGBuildtreesRemoval) {
+  Write-Host "Cleaning folder buildtrees inside vcpkg" -ForegroundColor Yellow
+  Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "$env:VCPKG_ROOT/buildtrees"
+}
+
 
 if ($UseVCPKG -and $ForceVCPKGCacheRemoval) {
   if ($IsWindows -or $IsWindowsPowerShell) {
@@ -435,7 +720,6 @@ if (-Not $DoNotSetupVS) {
   $tokens = getLatestVisualStudioWithDesktopWorkloadVersion
   $tokens = $tokens.split('.')
   if ($DoNotUseNinja) {
-    $dllfolder = "Release"
     $selectConfig = " --config Release "
     if ($tokens[0] -eq "14") {
       $generator = "Visual Studio 14 2015"
@@ -449,12 +733,13 @@ if (-Not $DoNotSetupVS) {
       $generator = "Visual Studio 16 2019"
       $AdditionalBuildSetup = $AdditionalBuildSetup + " -T `"host=x64`" -A `"x64`""
     }
+    elseif ($tokens[0] -eq "17") {
+      $generator = "Visual Studio 17 2022"
+      $AdditionalBuildSetup = $AdditionalBuildSetup + " -T `"host=x64`" -A `"x64`""
+    }
     else {
       MyThrow("Unknown Visual Studio version, unsupported configuration")
     }
-  }
-  if (-Not $UseVCPKG) {
-    $dllfolder = ""
   }
 }
 if ($DoNotSetupVS -and $DoNotUseNinja) {
@@ -467,7 +752,7 @@ if (-Not $IsMacOS -and $EnableCUDA) {
   $NVCC_EXE = Get-Command "nvcc" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Definition
   if (-Not $NVCC_EXE) {
     if (Test-Path env:CUDA_PATH) {
-      $env:PATH += ";${env:CUDA_PATH}/bin"
+      $env:PATH = '{0}{1}{2}' -f $env:PATH, [IO.Path]::PathSeparator, "${env:CUDA_PATH}/bin"
       Write-Host "Found cuda in ${env:CUDA_PATH}"
     }
     else {
@@ -485,9 +770,63 @@ if (-Not $IsMacOS -and $EnableCUDA) {
       Write-Host "Added missing env variable CUDACXX" -ForegroundColor Yellow
     }
   }
+  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_CUDA=ON"
+  if ($EnableCUDNN) {
+    $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_CUDNN=ON"
+  }
 }
 
-$build_folder = "./build_release"
+if (-Not $DisableDLLcopy) {
+  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON"
+}
+
+if ($EnableOPENMP) {
+  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_OPENMP=ON"
+}
+
+if ($EnableOPENCV) {
+  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_OPENCV=ON"
+}
+
+if ($EnableOPENCV_CUDA) {
+  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_OPENCV_CUDA=ON"
+}
+
+if ($EnableVTK) {
+  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DENABLE_VTK=ON"
+}
+
+if ($BuildDocumentation) {
+  Write-Host "Building documentation"
+  $AdditionalBuildSetup = $AdditionalBuildSetup + " -DBUILD_DOCUMENTATION=ON "
+}
+
+
+if ($EnableCXSDKIntegration) {
+  if (-Not (Test-Path "${env:CX_SDK_ROOT_64}")) {
+    MyThrow("The tool requires cxSDK!")
+  }
+
+  if (-Not (Test-Path "${env:CVB}")) {
+    MyThrow("The tool requires Stemmer Imaging Common Vision Blox!")
+  }
+}
+
+if ($EnableGOSDKIntegration) {
+  if (-Not (Test-Path "${env:GO_SDK_4}")) {
+    if (-Not (Test-Path "$PSScriptRoot\..\..\GO_SDK\")) {
+      MyThrow("Gocator_examples requires GO_SDK_4!")
+    }
+    else {
+      $GOSDKPATH = "$PSScriptRoot\..\..\GO_SDK\bin"
+    }
+  }
+  else {
+    $GOSDKPATH = "${env:GO_SDK_4}\bin\win64"
+  }
+}
+
+$build_folder = "$PSScriptRoot/../build_release"
 if (-Not $DoNotDeleteBuildFolder) {
   Write-Host "Removing folder $build_folder" -ForegroundColor Yellow
   Remove-Item -Force -Recurse -ErrorAction SilentlyContinue $build_folder
@@ -513,11 +852,36 @@ $exitCode = $proc.ExitCode
 if (-Not ($exitCode -eq 0)) {
   MyThrow("Config failed! Exited with error code $exitCode.")
 }
-$dllfiles = Get-ChildItem ./${dllfolder}/*.dll
-if ($dllfiles) {
-  Copy-Item $dllfiles ../bin
+
+if ($EnableGOSDKIntegration -and -Not $DisableDLLcopy) {
+  Copy-Item "${GOSDKPATH}\GoSdk.dll"  ..\bin
+  Copy-Item "${GOSDKPATH}\kApi.dll"   ..\bin
 }
-Set-Location ..
+
+if ($EnableCXSDKIntegration -and -Not $DisableDLLcopy) {
+  if (-Not $UseVCPKG) {
+    $dllfolder = "${env:CX_SDK_ROOT_64}\bin"
+    #$dllfolder = "${env:CX_SDK_ROOT_64}\ThirdParty\opencv-3.4.2\build_win_vc140_64_shared_vtk_static\x64\vc14\bin"
+    $dllfiles = Get-ChildItem ${dllfolder}\opencv_*342.dll
+    if ($dllfiles) {
+      Copy-Item $dllfiles ../bin
+    }
+  }
+
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\Cx3dLib_2_2.dll"                  ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\CxBaseLib_2_3.dll"                ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\CxCamLib_2_5.dll"                 ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\GenApi_MD_VC120_v3_1.dll"         ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\GCBase_MD_VC120_v3_1.dll"         ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\Log_MD_VC120_v3_1.dll"            ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\NodeMapData_MD_VC120_v3_1.dll"    ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\MathParser_MD_VC120_v3_1.dll"     ..\bin
+  Copy-Item "${env:CX_SDK_ROOT_64}\bin\XmlParser_MD_VC120_v3_1.dll"      ..\bin
+  Copy-Item "${env:CVB}\GenICam\bin\win64_x64\TLIs\GEVTL.cti"            ..\bin
+  Copy-Item "..\data\xml\calib_bin_v2_compatibel.xml"                    ..\bin
+}
+
+Pop-Location
 
 if (-Not $DoNotDeleteBuildFolder) {
   Write-Host "Removing folder $build_folder" -ForegroundColor Yellow
@@ -525,7 +889,6 @@ if (-Not $DoNotDeleteBuildFolder) {
 }
 
 Write-Host "Build complete!" -ForegroundColor Green
-Pop-Location
 
 if ($ForceVCPKGBuildtreesRemoval -and (-Not $UseVCPKG)) {
   Write-Host "VCPKG is not enabled, so local vcpkg buildtrees folder will not be deleted even if requested" -ForegroundColor Yellow
@@ -549,6 +912,35 @@ if ($UseVCPKG -and $ForceVCPKGPackagesRemoval) {
 
 if ($vcpkg_root_set_by_this_script) {
   $env:VCPKG_ROOT = $null
+}
+
+if ($vcpkg_triplet_set_by_this_script) {
+  $env:VCPKG_DEFAULT_TRIPLET = $null
+}
+
+if ($vcpkg_branch_set_by_this_script) {
+  Push-Location $vcpkg_path
+  $git_args = "checkout -"
+  Write-Host "git args: $git_args"
+  $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "$git_args"
+  $handle = $proc.Handle
+  $proc.WaitForExit()
+  $exitCode = $proc.ExitCode
+  if (-Not ($exitCode -eq 0)) {
+    MyThrow("Checking out previous branch failed! Exited with error code $exitCode.")
+  }
+  if ($VCPKGFork -ne "") {
+    $git_args = "remote rm vcpkgfork"
+    Write-Host "git args: $git_args"
+    $proc = Start-Process -NoNewWindow -PassThru -FilePath $GIT_EXE -ArgumentList "$git_args"
+    $handle = $proc.Handle
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    if (-Not ($exitCode -eq 0)) {
+      MyThrow("Checking out previous branch failed! Exited with error code $exitCode.")
+    }
+  }
+  Pop-Location
 }
 
 $ErrorActionPreference = "SilentlyContinue"
