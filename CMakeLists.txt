@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
 
+if(DEFINED ENV{VCPKG_DEFAULT_TRIPLET})
+  message(STATUS "Setting default vcpkg target triplet to $ENV{VCPKG_DEFAULT_TRIPLET}")
+  set(VCPKG_TARGET_TRIPLET $ENV{VCPKG_DEFAULT_TRIPLET})
+endif()
+
 if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
   set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
   message(STATUS "VCPKG found: $ENV{VCPKG_ROOT}")
