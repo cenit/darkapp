@@ -32,7 +32,7 @@ jobs:
     - name: Update apt
       run: sudo apt update
     - name: Install dependencies
-      run: sudo apt-get install -y yasm nasm gperf libgles2-mesa-dev libx11-dev libxft-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxdamage-dev libxinerama-dev
+      run: sudo apt-get install -y --no-install-recommends yasm nasm gperf automake autoconf libtool pkg-config autoconf-archive libgles2-mesa-dev libx11-dev libxft-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxdamage-dev libxinerama-dev libdbus-1-dev libxtst-dev
     - name: 'Setup vcpkg and NuGet artifacts backend'
       shell: bash
       run: >
@@ -131,4 +131,4 @@ jobs:
 
     - name: 'Build'
       shell: pwsh
-      run: ${{ github.workspace }}/scripts/build.ps1 -UseVCPKG -DoNotUpdateVCPKG -EnableOPENCV -DisableInteractive -DoNotUpdateTOOL
+      run: ${{ github.workspace }}/scripts/build.ps1 -UseVCPKG -DoNotUpdateVCPKG -EnableOPENCV -ForceLocalVCPKG -DisableInteractive -DoNotUpdateTOOL
