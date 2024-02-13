@@ -19,7 +19,9 @@ jobs:
   ubuntu-vcpkg:
     runs-on: ubuntu-20.04
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
 
     - name: Setup tmate session
       uses: mxschmitt/action-tmate@v3
@@ -58,7 +60,9 @@ jobs:
   osx-vcpkg:
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
 
     - name: Setup tmate session
       uses: mxschmitt/action-tmate@v3
@@ -96,7 +100,9 @@ jobs:
   win-vcpkg:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
 
     - name: Setup tmate session
       uses: mxschmitt/action-tmate@v3
